@@ -300,17 +300,10 @@ class TikTokRecorder:
                         buffer.clear()
                     out_file.flush()
 
-            if bytes_written >= min_stream_bytes:
-                break
-
-            logger.warning(
-                f"Stream candidate {index}/{len(live_urls)} closed early ({bytes_written} bytes) while room is alive. "
-                "Switching to next candidate CDN URL..."
-            )
-        else:
-            if bytes_written == 0 and os.path.exists(output):
-                Path(output).unlink(missing_ok=True)
-            raise LiveNotFound(TikTokError.RETRIEVE_LIVE_URL)
+            if bytes_written == 0:
+                if os.path.exists(output):
+                    Path(output).unlink(missing_ok=True)
+                raise LiveNotFound(TikTokError.RETRIEVE_LIVE_URL)
 
         logger.info(f"Recording finished: {Path(output).resolve()}\n")
         VideoManagement.convert_flv_to_mp4(output, self.bitrate, self.ffmpeg_path)
