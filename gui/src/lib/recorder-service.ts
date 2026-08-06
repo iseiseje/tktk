@@ -486,6 +486,10 @@ export function getRecordedVideos(): VideoFile[] {
 
     for (const file of files) {
       const ext = path.extname(file).toLowerCase();
+      // Skip temp segment files (dot-prefixed or containing _seg) and concat lists
+      if (file.startsWith('.') || file.includes('_seg') || file.endsWith('_concat.txt')) {
+        continue;
+      }
       if (validExts.includes(ext)) {
         const fullPath = path.join(dir, file);
         const stat = fs.statSync(fullPath);
