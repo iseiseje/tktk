@@ -49,6 +49,8 @@ function formatBytes(bytes: number): string {
 // Helper to auto-remux orphaned un-converted _flv.mp4 raw stream files into clean playable .mp4
 export function autoRemuxUnfinishedVideos(outputDir: string) {
   if (!fs.existsSync(outputDir)) return;
+  // Do NOT perform background remuxing if any recording session is active
+  if (activeProcesses.size > 0) return;
   const settings = getSettings();
   const ffmpegCmd = settings.ffmpegPath || 'ffmpeg';
 
@@ -471,9 +473,6 @@ export function getRecordedVideos(): VideoFile[] {
   if (!fs.existsSync(dir)) {
     return [];
   }
-
-  // Auto remux any pending raw FLV streams
-  autoRemuxUnfinishedVideos(dir);
 
   const validExts = ['.mp4', '.mkv', '.flv', '.ts', '.mov', '.avi'];
   try {
