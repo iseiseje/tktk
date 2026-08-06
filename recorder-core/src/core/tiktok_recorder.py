@@ -215,10 +215,6 @@ class TikTokRecorder:
                 stream_ended = False
                 while not stop_recording:
                     try:
-                        if not self.tiktok.is_room_alive(room_id):
-                            logger.info("User is no longer live. Stopping recording.")
-                            break
-
                         start_time = time.time()
                         for chunk in self.tiktok.download_live_stream(live_url):
                             buffer.extend(chunk)
@@ -235,8 +231,12 @@ class TikTokRecorder:
                         else:
                             stream_ended = True
 
-                        if stream_ended and bytes_written < min_stream_bytes:
-                            break
+                        if stream_ended:
+                            if not self.tiktok.is_room_alive(room_id):
+                                logger.info("User is no longer live. Stopping recording.")
+                                break
+                            elif bytes_written < min_stream_bytes:
+                                break
 
                     except ConnectionError:
                         if self.mode == Mode.AUTOMATIC:

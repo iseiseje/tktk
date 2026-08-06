@@ -416,14 +416,15 @@ class TikTokAPI:
     def download_live_stream(self, live_url: str):
         """Generator that returns the live stream for a given room_id."""
         try:
-            stream = self._http_client_stream.get(live_url, stream=True, timeout=15)
+            # timeout=(10, None) -> 10s connect timeout, no read timeout for long continuous live streams
+            stream = self._http_client_stream.get(live_url, stream=True, timeout=(10, None))
             if stream.status_code != 200:
                 logger.warning(f"Stream CDN returned HTTP {stream.status_code} for URL: {live_url[:60]}...")
                 return
-            for chunk in stream.iter_content(chunk_size=4096):
+            for chunk in stream.iter_content(chunk_size=8192):
                 if chunk:
                     yield chunk
         except Exception as e:
-            logger.warning(f"Error connecting to stream CDN: {e}")
+            logger.warning(f"Stream CDN connection closed: {e}")
             return
 
