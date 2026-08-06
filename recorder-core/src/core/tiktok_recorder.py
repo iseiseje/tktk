@@ -260,7 +260,20 @@ class TikTokRecorder:
                         url_index += 1  # Try next candidate URL
                     else:
                         consecutive_empty_streams = 0
-                        logger.info(f"Stream segment finished ({bytes_written} bytes recorded total). Reconnecting stream...")
+                        # CRITICAL: After a successful segment, ALWAYS refresh URLs from API
+                        # because TikTok CDN URLs are token-based and expire quickly on VPS
+                        logger.info(f"Stream segment finished ({bytes_written} bytes recorded total). Refreshing stream URLs...")
+                        try:
+                            refreshed = self.tiktok.get_live_url_candidates(room_id, user=user)
+                            if refreshed:
+                                current_live_urls = refreshed
+                                url_index = 0
+                                logger.info(f"Got {len(refreshed)} fresh CDN URLs. Reconnecting...")
+                            else:
+                                url_index += 1
+                        except Exception as refresh_err:
+                            logger.warning(f"URL refresh failed ({refresh_err}), reusing current URLs...")
+                            url_index += 1
                         time.sleep(1)
 
                     if consecutive_empty_streams >= 5:
@@ -283,14 +296,30 @@ class TikTokRecorder:
                             consecutive_empty_streams = 0
                             time.sleep(2)
 
-                except ConnectionError:
-                    if self.mode == Mode.AUTOMATIC:
-                        logger.error(Error.CONNECTION_CLOSED_AUTOMATIC)
-                        time.sleep(TimeOut.CONNECTION_CLOSED * TimeOut.ONE_MINUTE)
+                except ConnectionError as ex:
+                    logger.warning(f"Connection lost, refreshing stream URLs: {ex}")
+                    try:
+                        refreshed = self.tiktok.get_live_url_candidates(room_id, user=user)
+                        if refreshed:
+                            current_live_urls = refreshed
+                            url_index = 0
+                        else:
+                            url_index += 1
+                    except Exception:
+                        url_index += 1
+                    time.sleep(2)
 
                 except (RequestException, HTTPException) as ex:
-                    logger.warning(f"Network hiccup, switching stream candidate: {ex}")
-                    url_index += 1
+                    logger.warning(f"Network hiccup, refreshing stream URLs: {ex}")
+                    try:
+                        refreshed = self.tiktok.get_live_url_candidates(room_id, user=user)
+                        if refreshed:
+                            current_live_urls = refreshed
+                            url_index = 0
+                        else:
+                            url_index += 1
+                    except Exception:
+                        url_index += 1
                     time.sleep(2)
 
                 except KeyboardInterrupt:
@@ -298,8 +327,11 @@ class TikTokRecorder:
                     stop_recording = True
 
                 except Exception as ex:
-                    logger.error(f"Unexpected error during recording: {ex}", exc_info=True)
-                    stop_recording = True
+                    # DO NOT stop recording on unexpected errors — try next candidate URL instead
+                    logger.warning(f"Stream error (will retry): {ex}")
+                    url_index += 1
+                    consecutive_empty_streams += 1
+                    time.sleep(2)
 
                 finally:
                     if buffer:
