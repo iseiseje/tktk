@@ -1,3 +1,4 @@
+import os
 import time
 from http.client import HTTPException
 from pathlib import Path
@@ -204,7 +205,7 @@ class TikTokRecorder:
             else:
                 logger.info(f"Started recording (stream {index}/{len(live_urls)})...")
 
-            buffer_size = 512 * 1024  # 512 KB buffer
+            buffer_size = 16 * 1024  # 16 KB buffer for fast real-time disk writes
             buffer = bytearray()
             bytes_written = 0
 
@@ -224,6 +225,7 @@ class TikTokRecorder:
                             bytes_written += len(chunk)
                             if len(buffer) >= buffer_size:
                                 out_file.write(buffer)
+                                out_file.flush()
                                 buffer.clear()
 
                             elapsed_time = time.time() - start_time
@@ -275,6 +277,18 @@ class TikTokRecorder:
 
         logger.info(f"Recording finished: {Path(output).resolve()}\n")
         VideoManagement.convert_flv_to_mp4(output, self.bitrate, self.ffmpeg_path)
+
+        # Trigger Telegram upload if enabled
+        final_mp4 = output.replace("_flv.mp4", ".mp4")
+        target_upload_file = final_mp4 if (os.path.exists(final_mp4) and os.path.getsize(final_mp4) > 0) else output
+
+        if self.use_telegram and os.path.exists(target_upload_file) and os.path.getsize(target_upload_file) > 0:
+            try:
+                from upload.telegram import Telegram
+                logger.info(f"Uploading recorded video ({Path(target_upload_file).name}) to Telegram...")
+                Telegram().upload(target_upload_file)
+            except Exception as e:
+                logger.error(f"Error during Telegram upload: {e}", exc_info=True)
 
     def check_country_blacklisted(self):
         is_blacklisted = self.tiktok.is_country_blacklisted()

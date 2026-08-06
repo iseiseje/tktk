@@ -29,6 +29,10 @@ class VideoManagement:
         """
         logger.info("Converting {} to MP4 format...".format(file))
 
+        if not os.path.exists(file) or os.path.getsize(file) == 0:
+            logger.warning(f"File {file} does not exist or is empty (0 bytes). Skipping conversion.")
+            return
+
         if not VideoManagement.wait_for_file_release(file):
             logger.error(
                 f"File {file} is still locked after waiting. Skipping conversion."
