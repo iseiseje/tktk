@@ -32,14 +32,18 @@ class HttpClient:
         self.configure_session()
 
     def configure_session(self) -> None:
-        self.req_stream = requests.Session()
-
         if is_termux():
+            self.req_stream = requests.Session()
             self.req = self.req_stream
         else:
             from curl_cffi import Session, CurlSslVersion, CurlOpt
 
             self.req = Session(
+                impersonate="chrome136",
+                http_version="v1",
+                curl_options={CurlOpt.SSLVERSION: CurlSslVersion.TLSv1_2},
+            )
+            self.req_stream = Session(
                 impersonate="chrome136",
                 http_version="v1",
                 curl_options={CurlOpt.SSLVERSION: CurlSslVersion.TLSv1_2},

@@ -195,7 +195,7 @@ class TikTokRecorder:
 
         output = self._build_output_path(user)
 
-        min_stream_bytes = 4096
+        min_stream_bytes = 1024 * 1024  # 1 MB threshold for valid continuous stream
         for index, live_url in enumerate(live_urls, start=1):
             if self.duration:
                 logger.info(
@@ -264,12 +264,12 @@ class TikTokRecorder:
                             buffer.clear()
                         out_file.flush()
 
-            if bytes_written >= min_stream_bytes:
+            if bytes_written >= min_stream_bytes or not self.tiktok.is_room_alive(room_id):
                 break
 
             logger.warning(
-                f"Stream {index}/{len(live_urls)} returned only {bytes_written} bytes. "
-                "Trying another CDN/quality..."
+                f"Stream candidate {index}/{len(live_urls)} closed early ({bytes_written} bytes) while room is alive. "
+                "Switching to next candidate CDN URL..."
             )
         else:
             Path(output).unlink(missing_ok=True)
