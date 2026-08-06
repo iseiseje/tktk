@@ -24,15 +24,19 @@ const activeProcesses: Map<string, ChildProcess> = new Map();
 
 // Helper to detect python3 vs python binary
 export function getPythonCommand(): string {
-  try {
-    execSync('python3 --version', { stdio: 'ignore' });
-    return 'python3';
-  } catch (e) {
+  if (process.platform === 'win32') {
     try {
       execSync('python --version', { stdio: 'ignore' });
       return 'python';
-    } catch (err) {
+    } catch (e) {
+      return 'py';
+    }
+  } else {
+    try {
+      execSync('python3 --version', { stdio: 'ignore' });
       return 'python3';
+    } catch (e) {
+      return 'python';
     }
   }
 }
