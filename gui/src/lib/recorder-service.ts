@@ -352,7 +352,7 @@ export function stopRecording(sessionId: string): boolean {
       if (process.platform === 'win32') {
         execSync(`taskkill /pid ${child.pid} /T /F`);
       } else {
-        child.kill('SIGTERM');
+        child.kill('SIGINT');
       }
     } catch (e) {
       console.error(`Error killing process ${child.pid}:`, e);

@@ -1,4 +1,5 @@
 import os
+import signal
 import time
 from http.client import HTTPException
 from pathlib import Path
@@ -202,6 +203,13 @@ class TikTokRecorder:
         logger.info(f"Started continuous recording for user @{user} -> {Path(output).name}")
         logger.info("[PRESS CTRL + C ONCE TO STOP]")
 
+        # Handle SIGTERM gracefully (sent by Next.js dashboard on Stop)
+        # Convert it to KeyboardInterrupt so post-processing (concat + convert) can run
+        def _sigterm_handler(signum, frame):
+            raise KeyboardInterrupt("SIGTERM received")
+        original_sigterm = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGTERM, _sigterm_handler)
+
         buffer_size = 16 * 1024
         bytes_written = 0
         stop_recording = False
@@ -349,6 +357,9 @@ class TikTokRecorder:
                 Telegram().upload(target_upload_file)
             except Exception as e:
                 logger.error(f"Error during Telegram upload: {e}", exc_info=True)
+
+        # Restore original SIGTERM handler
+        signal.signal(signal.SIGTERM, original_sigterm)
 
     def _concat_segments(self, segment_files, output):
         """Concatenate multiple FLV segment files into one using FFmpeg concat demuxer."""
