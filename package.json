@@ -1,0 +1,11 @@
+{
+  "name": "tiktok-live-recorder-gui",
+  "version": "7.7.1",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix gui run dev",
+    "build": "npm --prefix gui run build",
+    "start": "npm --prefix gui run start",
+    "lint": "npm --prefix gui run lint"
+  }
+}

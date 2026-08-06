@@ -1,0 +1,43 @@
+# Node / Next.js
+node_modules/
+.next/
+gui/.next/
+gui/node_modules/
+out/
+build/
+
+# Application Data & Media Output (Do not push recorded videos/logs/DB)
+output/
+gui/data/
+*.log
+recorder-core/tiktok-recorder.log
+recorder-core/src/tiktok-recorder.log
+
+# Private Credentials & Session Cookies
+recorder-core/src/cookies.json
+recorder-core/src/telegram.json
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+recorder-core/.venv/
+recorder-core/__pycache__/
+recorder-core/src/__pycache__/
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
