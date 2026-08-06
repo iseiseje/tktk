@@ -187,162 +187,153 @@ class TikTokRecorder:
 
     def start_recording(self, user, room_id):
         """
-        Start recording live continuously.
+        Start recording live continuously using segment-based approach.
+        Each CDN stream connection writes to a separate .flv segment file.
+        After recording ends, segments are concatenated with FFmpeg into a clean playable file.
         """
         live_urls = self.tiktok.get_live_url_candidates(room_id, user=user)
         if not live_urls:
             raise LiveNotFound(TikTokError.RETRIEVE_LIVE_URL)
 
         output = self._build_output_path(user)
+        output_dir = Path(output).parent
+        output_stem = Path(output).stem  # e.g. "TK_user_2026.08.06_17-16-29_flv"
+
         logger.info(f"Started continuous recording for user @{user} -> {Path(output).name}")
         logger.info("[PRESS CTRL + C ONCE TO STOP]")
 
-        buffer_size = 16 * 1024  # 16 KB buffer for fast real-time disk writes
-        buffer = bytearray()
+        buffer_size = 16 * 1024
         bytes_written = 0
         stop_recording = False
         consecutive_empty_streams = 0
+        segment_files = []
+        segment_index = 0
+        url_index = 0
+        current_live_urls = list(live_urls)
 
-        # CRITICAL FIX: Open file in append binary ("ab") mode once so candidate switches never truncate/wipe video data
-        with open(output, "ab") as out_file:
-            url_index = 0
-            current_live_urls = list(live_urls)
+        while not stop_recording:
+            if url_index >= len(current_live_urls):
+                logger.info("Candidate URLs exhausted. Refreshing from API...")
+                refreshed = self.tiktok.get_live_url_candidates(room_id, user=user)
+                if refreshed:
+                    current_live_urls = refreshed
+                    url_index = 0
+                else:
+                    consecutive_empty_streams += 1
+                    if consecutive_empty_streams >= 3:
+                        logger.info("No live stream URLs found after retries. Stopping.")
+                        break
+                    time.sleep(3)
+                    continue
 
-            while not stop_recording:
-                if url_index >= len(current_live_urls):
-                    logger.info("Candidate URLs exhausted. Refreshing live stream URLs from API...")
-                    refreshed = self.tiktok.get_live_url_candidates(room_id, user=user)
-                    if refreshed:
-                        current_live_urls = refreshed
-                        url_index = 0
-                    else:
-                        consecutive_empty_streams += 1
-                        if consecutive_empty_streams >= 3:
-                            logger.info("No live stream URLs found after retries. Stopping recording.")
-                            break
-                        time.sleep(3)
-                        continue
+            live_url = current_live_urls[url_index]
+            chunk_received = False
+            start_time = time.time()
+            seg_path = str(output_dir / f".{output_stem}_seg{segment_index:04d}.flv")
 
-                live_url = current_live_urls[url_index]
-                chunk_received_in_session = False
-                start_time = time.time()
-
-                try:
+            try:
+                with open(seg_path, "wb") as seg_file:
+                    buffer = bytearray()
                     for chunk in self.tiktok.download_live_stream(live_url):
                         if chunk:
-                            # Strip duplicate FLV header on reconnected stream chunks
-                            if bytes_written > 0 and chunk.startswith(b"FLV"):
-                                if len(chunk) > 13:
-                                    chunk = chunk[13:]
-                                else:
-                                    continue
-
-                            chunk_received_in_session = True
+                            chunk_received = True
                             consecutive_empty_streams = 0
                             buffer.extend(chunk)
                             bytes_written += len(chunk)
 
                             if len(buffer) >= buffer_size:
-                                out_file.write(buffer)
-                                out_file.flush()
+                                seg_file.write(buffer)
+                                seg_file.flush()
                                 buffer.clear()
 
-                            elapsed_time = time.time() - start_time
-                            if self.duration and elapsed_time >= self.duration:
+                            if self.duration and (time.time() - start_time) >= self.duration:
                                 stop_recording = True
                                 break
 
-                    if stop_recording:
-                        break
-
-                    if not chunk_received_in_session:
-                        consecutive_empty_streams += 1
-                        url_index += 1  # Try next candidate URL
-                    else:
-                        consecutive_empty_streams = 0
-                        # CRITICAL: After a successful segment, ALWAYS refresh URLs from API
-                        # because TikTok CDN URLs are token-based and expire quickly on VPS
-                        logger.info(f"Stream segment finished ({bytes_written} bytes recorded total). Refreshing stream URLs...")
-                        try:
-                            refreshed = self.tiktok.get_live_url_candidates(room_id, user=user)
-                            if refreshed:
-                                current_live_urls = refreshed
-                                url_index = 0
-                                logger.info(f"Got {len(refreshed)} fresh CDN URLs. Reconnecting...")
-                            else:
-                                url_index += 1
-                        except Exception as refresh_err:
-                            logger.warning(f"URL refresh failed ({refresh_err}), reusing current URLs...")
-                            url_index += 1
-                        time.sleep(1)
-
-                    if consecutive_empty_streams >= 5:
-                        logger.info(f"Stream inactive after {consecutive_empty_streams} attempts. Verifying room status...")
-                        is_alive = False
-                        try:
-                            is_alive = self.tiktok.is_room_alive(room_id)
-                        except Exception:
-                            pass
-
-                        if not is_alive:
-                            logger.info("User is no longer live. Stopping recording.")
-                            break
-                        else:
-                            logger.info("User is still live. Re-fetching stream URLs...")
-                            refreshed = self.tiktok.get_live_url_candidates(room_id, user=user)
-                            if refreshed:
-                                current_live_urls = refreshed
-                                url_index = 0
-                            consecutive_empty_streams = 0
-                            time.sleep(2)
-
-                except ConnectionError as ex:
-                    logger.warning(f"Connection lost, refreshing stream URLs: {ex}")
-                    try:
-                        refreshed = self.tiktok.get_live_url_candidates(room_id, user=user)
-                        if refreshed:
-                            current_live_urls = refreshed
-                            url_index = 0
-                        else:
-                            url_index += 1
-                    except Exception:
-                        url_index += 1
-                    time.sleep(2)
-
-                except (RequestException, HTTPException) as ex:
-                    logger.warning(f"Network hiccup, refreshing stream URLs: {ex}")
-                    try:
-                        refreshed = self.tiktok.get_live_url_candidates(room_id, user=user)
-                        if refreshed:
-                            current_live_urls = refreshed
-                            url_index = 0
-                        else:
-                            url_index += 1
-                    except Exception:
-                        url_index += 1
-                    time.sleep(2)
-
-                except KeyboardInterrupt:
-                    logger.info("Recording stopped by user.")
-                    stop_recording = True
-
-                except Exception as ex:
-                    # DO NOT stop recording on unexpected errors — try next candidate URL instead
-                    logger.warning(f"Stream error (will retry): {ex}")
-                    url_index += 1
-                    consecutive_empty_streams += 1
-                    time.sleep(2)
-
-                finally:
+                    # Flush remaining buffer for this segment
                     if buffer:
-                        out_file.write(buffer)
+                        seg_file.write(buffer)
                         buffer.clear()
-                    out_file.flush()
 
-            if bytes_written == 0:
-                if os.path.exists(output):
-                    Path(output).unlink(missing_ok=True)
-                raise LiveNotFound(TikTokError.RETRIEVE_LIVE_URL)
+                # Track valid segments
+                if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
+                    segment_files.append(seg_path)
+                    segment_index += 1
+                else:
+                    Path(seg_path).unlink(missing_ok=True)
+
+                if stop_recording:
+                    break
+
+                if not chunk_received:
+                    consecutive_empty_streams += 1
+                    url_index += 1
+                else:
+                    consecutive_empty_streams = 0
+                    logger.info(f"Segment {segment_index} finished ({bytes_written} bytes total). Refreshing URLs...")
+                    try:
+                        refreshed = self.tiktok.get_live_url_candidates(room_id, user=user)
+                        if refreshed:
+                            current_live_urls = refreshed
+                            url_index = 0
+                            logger.info(f"Got {len(refreshed)} fresh CDN URLs. Reconnecting...")
+                        else:
+                            url_index += 1
+                    except Exception as e:
+                        logger.warning(f"URL refresh failed ({e}), trying next candidate...")
+                        url_index += 1
+                    time.sleep(1)
+
+                if consecutive_empty_streams >= 5:
+                    logger.info("Stream inactive after 5 attempts. Verifying room status...")
+                    is_alive = False
+                    try:
+                        is_alive = self.tiktok.is_room_alive(room_id)
+                    except Exception:
+                        pass
+                    if not is_alive:
+                        logger.info("User is no longer live. Stopping recording.")
+                        break
+                    else:
+                        logger.info("User is still live. Re-fetching stream URLs...")
+                        refreshed = self.tiktok.get_live_url_candidates(room_id, user=user)
+                        if refreshed:
+                            current_live_urls = refreshed
+                            url_index = 0
+                        consecutive_empty_streams = 0
+                        time.sleep(2)
+
+            except KeyboardInterrupt:
+                logger.info("Recording stopped by user.")
+                # Save current segment if it has data
+                if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
+                    if seg_path not in segment_files:
+                        segment_files.append(seg_path)
+                stop_recording = True
+
+            except Exception as ex:
+                logger.warning(f"Stream error (will retry): {ex}")
+                # Save current segment if it has data
+                if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
+                    if seg_path not in segment_files:
+                        segment_files.append(seg_path)
+                        segment_index += 1
+                url_index += 1
+                consecutive_empty_streams += 1
+                time.sleep(2)
+
+        # --- Post-recording: assemble segments into final file ---
+        if not segment_files:
+            raise LiveNotFound(TikTokError.RETRIEVE_LIVE_URL)
+
+        if len(segment_files) == 1:
+            # Single segment — just rename to output
+            os.rename(segment_files[0], output)
+            logger.info(f"Recording finished (single segment): {Path(output).name}")
+        else:
+            # Multiple segments — concatenate with FFmpeg concat demuxer
+            logger.info(f"Concatenating {len(segment_files)} segments...")
+            self._concat_segments(segment_files, output)
 
         logger.info(f"Recording finished: {Path(output).resolve()}\n")
         VideoManagement.convert_flv_to_mp4(output, self.bitrate, self.ffmpeg_path)
@@ -358,6 +349,37 @@ class TikTokRecorder:
                 Telegram().upload(target_upload_file)
             except Exception as e:
                 logger.error(f"Error during Telegram upload: {e}", exc_info=True)
+
+    def _concat_segments(self, segment_files, output):
+        """Concatenate multiple FLV segment files into one using FFmpeg concat demuxer."""
+        import subprocess
+
+        concat_list = output.replace("_flv.mp4", "_concat.txt")
+        try:
+            with open(concat_list, "w") as f:
+                for seg in segment_files:
+                    # Use absolute path for safety
+                    f.write(f"file '{os.path.abspath(seg)}'\n")
+
+            ffmpeg_cmd = self.ffmpeg_path or "ffmpeg"
+            result = subprocess.run(
+                [ffmpeg_cmd, "-y", "-f", "concat", "-safe", "0", "-i", concat_list, "-c", "copy", output],
+                capture_output=True, text=True, timeout=300,
+            )
+
+            if result.returncode != 0:
+                logger.warning(f"FFmpeg concat failed: {result.stderr[:500]}")
+                # Fallback: use the largest segment as the output
+                largest = max(segment_files, key=lambda f: os.path.getsize(f) if os.path.exists(f) else 0)
+                os.rename(largest, output)
+                segment_files.remove(largest)
+
+            logger.info(f"Concatenated {len(segment_files)} segments into {Path(output).name}")
+        finally:
+            # Clean up segment files and concat list
+            for seg in segment_files:
+                Path(seg).unlink(missing_ok=True)
+            Path(concat_list).unlink(missing_ok=True)
 
     def check_country_blacklisted(self):
         is_blacklisted = self.tiktok.is_country_blacklisted()
