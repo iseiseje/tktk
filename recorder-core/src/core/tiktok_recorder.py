@@ -232,11 +232,24 @@ class TikTokRecorder:
                             stream_ended = True
 
                         if stream_ended:
-                            if not self.tiktok.is_room_alive(room_id):
-                                logger.info("User is no longer live. Stopping recording.")
+                            # Re-check live status with retries to avoid false positives due to API rate limits or CDN segment drops
+                            is_alive = False
+                            for attempt in range(3):
+                                try:
+                                    if self.tiktok.is_room_alive(room_id):
+                                        is_alive = True
+                                        break
+                                except Exception:
+                                    pass
+                                time.sleep(2)
+
+                            if not is_alive:
+                                logger.info("User is no longer live after 3 checks. Stopping recording.")
                                 break
-                            elif bytes_written < min_stream_bytes:
-                                break
+                            else:
+                                logger.info("Stream segment dropped, but user is still live. Reconnecting stream...")
+                                stream_ended = False
+                                time.sleep(1)
 
                     except ConnectionError:
                         if self.mode == Mode.AUTOMATIC:

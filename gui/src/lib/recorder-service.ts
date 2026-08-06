@@ -64,8 +64,8 @@ export function autoRemuxUnfinishedVideos(outputDir: string) {
 
         try {
           const stat = fs.statSync(fullFlvPath);
-          // CRITICAL FIX: Skip files that are actively being written by Python (modified within 20s)
-          if (now - stat.mtimeMs < 20000) {
+          // CRITICAL FIX: Skip files modified within the last 2 minutes (active or recently ended recording sessions)
+          if (now - stat.mtimeMs < 120000) {
             continue;
           }
 
