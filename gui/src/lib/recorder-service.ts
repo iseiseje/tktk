@@ -46,7 +46,7 @@ function formatBytes(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
-// Helper to auto-remux un-converted _flv.mp4 raw stream files into clean playable .mp4
+// Helper to auto-remux orphaned un-converted _flv.mp4 raw stream files into clean playable .mp4
 export function autoRemuxUnfinishedVideos(outputDir: string) {
   if (!fs.existsSync(outputDir)) return;
   const settings = getSettings();
@@ -54,17 +54,26 @@ export function autoRemuxUnfinishedVideos(outputDir: string) {
 
   try {
     const files = fs.readdirSync(outputDir);
+    const now = Date.now();
+
     for (const file of files) {
       if (file.endsWith('_flv.mp4')) {
         const fullFlvPath = path.join(outputDir, file);
-        const targetMp4Name = file.replace(/_flv\.mp4$/, '.mp4');
-        const targetMp4Path = path.join(outputDir, targetMp4Name);
 
         try {
+          const stat = fs.statSync(fullFlvPath);
+          // CRITICAL FIX: Skip files that are actively being written by Python (modified within 20s)
+          if (now - stat.mtimeMs < 20000) {
+            continue;
+          }
+
+          const targetMp4Name = file.replace(/_flv\.mp4$/, '.mp4');
+          const targetMp4Path = path.join(outputDir, targetMp4Name);
+
           execSync(`"${ffmpegCmd}" -y -i "${fullFlvPath}" -c copy "${targetMp4Path}"`, { stdio: 'ignore' });
           if (fs.existsSync(targetMp4Path) && fs.statSync(targetMp4Path).size > 0) {
             fs.unlinkSync(fullFlvPath);
-            console.log(`[SYS] Auto-remuxed ${file} -> ${targetMp4Name}`);
+            console.log(`[SYS] Auto-remuxed orphaned file ${file} -> ${targetMp4Name}`);
           }
         } catch (e) {
           console.error(`Failed remuxing ${file}:`, e);
