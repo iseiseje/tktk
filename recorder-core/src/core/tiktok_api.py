@@ -370,7 +370,12 @@ class TikTokAPI:
             self._add_live_url_candidate(candidates, stream_url.get("rtmp_pull_url"))
             return candidates
 
-        # Extract stream options
+        # Prioritize direct FLV pull URLs first (FULL_HD1, HD1, etc.) for continuous recording
+        flv_pull_url = stream_url.get("flv_pull_url", {})
+        for key in ("FULL_HD1", "HD1", "SD2", "SD1"):
+            self._add_live_url_candidate(candidates, flv_pull_url.get(key))
+
+        # Extract SDK stream options as secondary candidates
         sdk_data = json.loads(sdk_data_str).get("data", {})
         qualities = (
             stream_url.get("live_core_sdk_data", {})
@@ -378,25 +383,19 @@ class TikTokAPI:
             .get("options", {})
             .get("qualities", [])
         )
-        if not qualities:
-            logger.warning("No qualities found in the stream data. Returning None.")
-            return candidates
-        level_map = {q["sdk_key"]: q["level"] for q in qualities}
-
-        ordered_sdk_keys = sorted(
-            sdk_data.keys(), key=lambda key: level_map.get(key, -1), reverse=True
-        )
-        for sdk_key in ordered_sdk_keys:
-            entry = sdk_data[sdk_key]
-            stream_main = entry.get("main", {})
-            self._add_live_url_candidate(candidates, stream_main.get("flv"))
-            self._add_live_url_candidate(
-                candidates, stream_main.get("hls") or stream_main.get("m3u8")
+        if qualities:
+            level_map = {q["sdk_key"]: q["level"] for q in qualities}
+            ordered_sdk_keys = sorted(
+                sdk_data.keys(), key=lambda key: level_map.get(key, -1), reverse=True
             )
+            for sdk_key in ordered_sdk_keys:
+                entry = sdk_data[sdk_key]
+                stream_main = entry.get("main", {})
+                self._add_live_url_candidate(candidates, stream_main.get("flv"))
+                self._add_live_url_candidate(
+                    candidates, stream_main.get("hls") or stream_main.get("m3u8")
+                )
 
-        flv_pull_url = stream_url.get("flv_pull_url", {})
-        for key in ("FULL_HD1", "HD1", "SD2", "SD1"):
-            self._add_live_url_candidate(candidates, flv_pull_url.get(key))
         self._add_live_url_candidate(candidates, stream_url.get("hls_pull_url"))
         self._add_live_url_candidate(candidates, stream_url.get("rtmp_pull_url"))
 
@@ -423,6 +422,7 @@ class TikTokAPI:
                 headers={
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.127 Safari/537.36",
                     "Referer": "https://www.tiktok.com/",
+                    "Accept-Encoding": "identity",
                 },
             )
             if hasattr(stream, "status_code") and stream.status_code == 200:
@@ -456,6 +456,7 @@ class TikTokAPI:
                 headers={
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.127 Safari/537.36",
                     "Referer": "https://www.tiktok.com/",
+                    "Accept-Encoding": "identity",
                 },
                 timeout=15,
             )
