@@ -212,44 +212,58 @@ class TikTokRecorder:
             logger.info("[PRESS CTRL + C ONCE TO STOP]")
             with open(output, "wb") as out_file:
                 stop_recording = False
-                stream_ended = False
+                consecutive_empty_streams = 0
+
                 while not stop_recording:
                     try:
                         start_time = time.time()
+                        chunk_received_in_session = False
+
                         for chunk in self.tiktok.download_live_stream(live_url):
-                            buffer.extend(chunk)
-                            bytes_written += len(chunk)
-                            if len(buffer) >= buffer_size:
-                                out_file.write(buffer)
-                                out_file.flush()
-                                buffer.clear()
+                            if chunk:
+                                chunk_received_in_session = True
+                                consecutive_empty_streams = 0
+                                buffer.extend(chunk)
+                                bytes_written += len(chunk)
 
-                            elapsed_time = time.time() - start_time
-                            if self.duration and elapsed_time >= self.duration:
-                                stop_recording = True
-                                break
-                        else:
-                            stream_ended = True
+                                if len(buffer) >= buffer_size:
+                                    out_file.write(buffer)
+                                    out_file.flush()
+                                    buffer.clear()
 
-                        if stream_ended:
-                            # Re-check live status with retries to avoid false positives due to API rate limits or CDN segment drops
+                                elapsed_time = time.time() - start_time
+                                if self.duration and elapsed_time >= self.duration:
+                                    stop_recording = True
+                                    break
+
+                        if stop_recording:
+                            break
+
+                        if not chunk_received_in_session:
+                            consecutive_empty_streams += 1
+
+                        # If 5 consecutive attempts returned no chunks, check if room is actually alive
+                        if consecutive_empty_streams >= 5:
+                            logger.info(f"Stream inactive after {consecutive_empty_streams} attempts. Verifying if room is still live...")
                             is_alive = False
-                            for attempt in range(3):
-                                try:
-                                    if self.tiktok.is_room_alive(room_id):
-                                        is_alive = True
-                                        break
-                                except Exception:
-                                    pass
-                                time.sleep(2)
+                            try:
+                                is_alive = self.tiktok.is_room_alive(room_id)
+                            except Exception:
+                                pass
 
                             if not is_alive:
-                                logger.info("User is no longer live after 3 checks. Stopping recording.")
+                                logger.info("User is no longer live. Stopping recording.")
                                 break
                             else:
-                                logger.info("Stream segment dropped, but user is still live. Reconnecting stream...")
-                                stream_ended = False
-                                time.sleep(1)
+                                logger.info("User is still live! Refreshing stream URLs and reconnecting...")
+                                new_urls = self.tiktok.get_live_url_candidates(room_id, user=user)
+                                if new_urls:
+                                    live_url = new_urls[0]
+                                consecutive_empty_streams = 0
+                                time.sleep(2)
+                        else:
+                            logger.info(f"Stream segment completed ({bytes_written} bytes recorded so far). Reconnecting CDN stream...")
+                            time.sleep(1)
 
                     except ConnectionError:
                         if self.mode == Mode.AUTOMATIC:
@@ -257,7 +271,7 @@ class TikTokRecorder:
                             time.sleep(TimeOut.CONNECTION_CLOSED * TimeOut.ONE_MINUTE)
 
                     except (RequestException, HTTPException) as ex:
-                        logger.warning(f"Network hiccup, retrying: {ex}")
+                        logger.warning(f"Network hiccup, retrying stream: {ex}")
                         time.sleep(2)
 
                     except KeyboardInterrupt:
