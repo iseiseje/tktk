@@ -195,7 +195,7 @@ class TikTokRecorder:
 
         output = self._build_output_path(user)
 
-        min_stream_bytes = 1024 * 1024  # 1 MB threshold for valid continuous stream
+        min_stream_bytes = 4096
         for index, live_url in enumerate(live_urls, start=1):
             if self.duration:
                 logger.info(
@@ -264,7 +264,7 @@ class TikTokRecorder:
                             buffer.clear()
                         out_file.flush()
 
-            if bytes_written >= min_stream_bytes or not self.tiktok.is_room_alive(room_id):
+            if bytes_written >= min_stream_bytes:
                 break
 
             logger.warning(
@@ -272,7 +272,8 @@ class TikTokRecorder:
                 "Switching to next candidate CDN URL..."
             )
         else:
-            Path(output).unlink(missing_ok=True)
+            if bytes_written == 0 and os.path.exists(output):
+                Path(output).unlink(missing_ok=True)
             raise LiveNotFound(TikTokError.RETRIEVE_LIVE_URL)
 
         logger.info(f"Recording finished: {Path(output).resolve()}\n")

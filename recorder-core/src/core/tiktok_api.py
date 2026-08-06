@@ -414,17 +414,56 @@ class TikTokAPI:
         return self.get_live_urls(room_id, user=user)
 
     def download_live_stream(self, live_url: str):
-        """Generator that returns the live stream for a given room_id."""
+        """Generator that returns the live stream chunks for a given live_url."""
+        # Method 1: Try self._http_client_stream (curl_cffi or requests)
         try:
-            # timeout=(10, None) -> 10s connect timeout, no read timeout for long continuous live streams
-            stream = self._http_client_stream.get(live_url, stream=True, timeout=(10, None))
-            if stream.status_code != 200:
-                logger.warning(f"Stream CDN returned HTTP {stream.status_code} for URL: {live_url[:60]}...")
-                return
-            for chunk in stream.iter_content(chunk_size=8192):
-                if chunk:
-                    yield chunk
+            stream = self._http_client_stream.get(
+                live_url,
+                stream=True,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.127 Safari/537.36",
+                    "Referer": "https://www.tiktok.com/",
+                },
+            )
+            if hasattr(stream, "status_code") and stream.status_code == 200:
+                if hasattr(stream, "iter_content"):
+                    try:
+                        for chunk in stream.iter_content(chunk_size=8192):
+                            if chunk:
+                                yield chunk
+                        return
+                    except Exception as e:
+                        logger.warning(f"iter_content failed: {e}")
+
+                if hasattr(stream, "iter_chunks"):
+                    try:
+                        for chunk in stream.iter_chunks():
+                            if chunk:
+                                yield chunk
+                        return
+                    except Exception as e:
+                        logger.warning(f"iter_chunks failed: {e}")
         except Exception as e:
-            logger.warning(f"Stream CDN connection closed: {e}")
+            logger.warning(f"Primary stream download failed ({e}), trying standard requests fallback...")
+
+        # Method 2: Fallback to standard Python requests session with stream=True
+        try:
+            import requests
+            session = requests.Session()
+            res = session.get(
+                live_url,
+                stream=True,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.127 Safari/537.36",
+                    "Referer": "https://www.tiktok.com/",
+                },
+                timeout=15,
+            )
+            if res.status_code == 200:
+                for chunk in res.iter_content(chunk_size=8192):
+                    if chunk:
+                        yield chunk
+        except Exception as ex:
+            logger.error(f"Fallback requests stream download failed: {ex}")
             return
 
