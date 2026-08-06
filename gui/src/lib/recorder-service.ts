@@ -22,6 +22,21 @@ if (!fs.existsSync(DATA_DIR)) {
 // In-memory active process registry
 const activeProcesses: Map<string, ChildProcess> = new Map();
 
+// Helper to detect python3 vs python binary
+export function getPythonCommand(): string {
+  try {
+    execSync('python3 --version', { stdio: 'ignore' });
+    return 'python3';
+  } catch (e) {
+    try {
+      execSync('python --version', { stdio: 'ignore' });
+      return 'python';
+    } catch (err) {
+      return 'python3';
+    }
+  }
+}
+
 // Helper to format bytes to human readable format
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -223,6 +238,7 @@ export function startRecording(params: {
     args.push('-no-update-check');
   }
 
+  const pyCmd = getPythonCommand();
   const newSession: RecordingSession = {
     id: sessionId,
     user: targetUser || params.url || params.roomId || 'unknown',
@@ -237,11 +253,11 @@ export function startRecording(params: {
     telegram: !!params.telegram,
     status: 'running',
     startTime: new Date().toISOString(),
-    logs: [`[SYS] Initializing TikTok Live Recorder (PID pending)...`, `[CMD] python ${args.join(' ')}`],
+    logs: [`[SYS] Initializing TikTok Live Recorder (PID pending)...`, `[CMD] ${pyCmd} ${args.join(' ')}`],
   };
 
   try {
-    const child = spawn('python', args, {
+    const child = spawn(pyCmd, args, {
       cwd: RECORDER_CORE_DIR,
       env: { ...process.env, PYTHONUNBUFFERED: '1' },
     });
@@ -394,8 +410,9 @@ except Exception as e:
   const tempScriptPath = path.join(DATA_DIR, `check_${Date.now()}.py`);
   fs.writeFileSync(tempScriptPath, scriptContent, 'utf-8');
 
+  const pyCmd = getPythonCommand();
   return new Promise((resolve) => {
-    const child = spawn('python', [tempScriptPath], {
+    const child = spawn(pyCmd, [tempScriptPath], {
       cwd: path.join(RECORDER_CORE_DIR, 'src'),
       env: { ...process.env },
     });
@@ -515,7 +532,8 @@ export function getSystemStats(): SystemStats {
   let ffmpegAvailable = false;
 
   try {
-    execSync('python --version', { stdio: 'ignore' });
+    const pyCmd = getPythonCommand();
+    execSync(`${pyCmd} --version`, { stdio: 'ignore' });
     pythonAvailable = true;
   } catch (e) {}
 
