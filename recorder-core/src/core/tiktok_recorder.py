@@ -230,6 +230,13 @@ class TikTokRecorder:
                 try:
                     for chunk in self.tiktok.download_live_stream(live_url):
                         if chunk:
+                            # Strip duplicate FLV header on reconnected stream chunks
+                            if bytes_written > 0 and chunk.startswith(b"FLV"):
+                                if len(chunk) > 13:
+                                    chunk = chunk[13:]
+                                else:
+                                    continue
+
                             chunk_received_in_session = True
                             consecutive_empty_streams = 0
                             buffer.extend(chunk)
