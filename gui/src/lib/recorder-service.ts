@@ -202,7 +202,8 @@ export function startRecording(params: {
   const sessionId = `rec_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const outputDir = settings.outputDir || DEFAULT_OUTPUT_DIR;
 
-  const args: string[] = ['src/main.py'];
+  const mainPyPath = path.join(RECORDER_CORE_DIR, 'src', 'main.py');
+  const args: string[] = [mainPyPath];
 
   if (targetUser) {
     args.push('-user', targetUser);
