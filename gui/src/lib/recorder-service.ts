@@ -173,10 +173,20 @@ export function getSessions(): RecordingSession[] {
     if (fs.existsSync(SESSIONS_FILE)) {
       const data = fs.readFileSync(SESSIONS_FILE, 'utf-8');
       const sessions: RecordingSession[] = JSON.parse(data);
-      // Sync status with active processes
+      // Sync status: if session is 'running' but activeProcesses doesn't have it,
+      // verify using the actual OS PID before marking it as stopped.
+      // This prevents hot-reload from wiping the activeProcesses Map and wrongly
+      // marking running sessions as stopped.
       return sessions.map((s) => {
         if (s.status === 'running' && !activeProcesses.has(s.id)) {
-          return { ...s, status: 'stopped', stopTime: s.stopTime || new Date().toISOString() };
+          // Check if the PID is still alive in the OS before changing status
+          if (s.pid && isPidRunning(s.pid)) {
+            // Process is alive but we lost track of it (e.g. after hot-reload)
+            // Keep it as running — we can't stop it but at least show it correctly
+            return s;
+          }
+          // PID is gone — session truly ended without proper cleanup
+          return { ...s, status: 'stopped' as const, stopTime: s.stopTime || new Date().toISOString() };
         }
         return s;
       });
@@ -665,36 +675,51 @@ export function getRecordedVideos(): VideoFile[] {
     // --- Virtual entries for active recording sessions ---
     // Show each running session as a "Recording in Progress" entry in the vault
     const runningSessions = getSessions().filter((s) => s.status === 'running');
+
     for (const session of runningSessions) {
       const sessionDir = session.outputDir || dir;
 
-      // Calculate total bytes captured so far from segment files
+      // Calculate total bytes captured so far:
+      // Scan ALL files in the output dir and sum up anything belonging to this session.
+      // This catches: dot-prefixed segment files, non-hidden _flv.mp4 raw streams.
       let capturedBytes = 0;
       try {
-        const allFiles = fs.readdirSync(sessionDir);
+        // Use readdirSync with options to get all files including dot-files on Windows
+        const allFiles = fs.readdirSync(sessionDir, { withFileTypes: true })
+          .filter((d) => d.isFile())
+          .map((d) => d.name);
+
+        const sessionUser = session.user.toLowerCase();
         for (const f of allFiles) {
-          // Segment files: .<stem>_seg*.flv  OR  non-hidden _flv.mp4 already written
-          if ((f.startsWith('.') && f.includes('_seg') && f.endsWith('.flv')) ||
-               f.endsWith('_flv.mp4')) {
+          const fLower = f.toLowerCase();
+          // Match any file that belongs to this user's recording session:
+          // - dot-prefix hidden segment files: .TK_user_..._seg*.flv
+          // - raw stream: TK_user_..._flv.mp4
+          if (
+            (fLower.includes(sessionUser) || fLower.startsWith('.tk_')) &&
+            (f.endsWith('.flv') || f.endsWith('_flv.mp4'))
+          ) {
             try {
               capturedBytes += fs.statSync(path.join(sessionDir, f)).size;
             } catch {}
           }
         }
-      } catch {}
+      } catch (e) {
+        console.error('[SYS] Error scanning segment files for session', session.id, e);
+      }
 
       const virtualFilename = `LIVE_${session.user}_recording_in_progress.mp4`;
 
-      // Avoid adding a virtual entry if a real output file already exists for this session
+      // Avoid adding a virtual entry if a real finished output file already exists for this session
       const alreadyHasFile = videoFiles.some(
-        (v) => v.filename.includes(session.user) && !v.isRecording
+        (v) => !v.isRecording && v.filename.toLowerCase().includes(session.user.toLowerCase())
       );
       if (!alreadyHasFile) {
         videoFiles.push({
           filename: virtualFilename,
           path: '',
           size: capturedBytes,
-          sizeFormatted: `${formatBytes(capturedBytes)} captured`,
+          sizeFormatted: capturedBytes > 0 ? `${formatBytes(capturedBytes)} captured` : 'Starting...',
           createdAt: session.startTime,
           userTag: `@${session.user}`,
           format: 'LIVE',
@@ -705,7 +730,7 @@ export function getRecordedVideos(): VideoFile[] {
       }
     }
 
-    // Sort by modified date descending (virtual entries will be first since startTime is recent)
+    // Sort by date descending — virtual entries appear first since startTime is recent
     return videoFiles.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   } catch (err) {
     console.error('Error scanning video directory:', err);
