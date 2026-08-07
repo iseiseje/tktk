@@ -674,17 +674,16 @@ export function getRecordedVideos(): VideoFile[] {
 
     // --- Virtual entries for active recording sessions ---
     // Show each running session as a "Recording in Progress" entry in the vault
-    const runningSessions = getSessions().filter((s) => s.status === 'running');
+    const allSessions = getSessions();
+    const runningSessions = allSessions.filter((s) => s.status === 'running');
 
     for (const session of runningSessions) {
       const sessionDir = session.outputDir || dir;
 
       // Calculate total bytes captured so far:
       // Scan ALL files in the output dir and sum up anything belonging to this session.
-      // This catches: dot-prefixed segment files, non-hidden _flv.mp4 raw streams.
       let capturedBytes = 0;
       try {
-        // Use readdirSync with options to get all files including dot-files on Windows
         const allFiles = fs.readdirSync(sessionDir, { withFileTypes: true })
           .filter((d) => d.isFile())
           .map((d) => d.name);
@@ -692,9 +691,6 @@ export function getRecordedVideos(): VideoFile[] {
         const sessionUser = session.user.toLowerCase();
         for (const f of allFiles) {
           const fLower = f.toLowerCase();
-          // Match any file that belongs to this user's recording session:
-          // - dot-prefix hidden segment files: .TK_user_..._seg*.flv
-          // - raw stream: TK_user_..._flv.mp4
           if (
             (fLower.includes(sessionUser) || fLower.startsWith('.tk_')) &&
             (f.endsWith('.flv') || f.endsWith('_flv.mp4'))
@@ -725,6 +721,39 @@ export function getRecordedVideos(): VideoFile[] {
           format: 'LIVE',
           url: '',
           isRecording: true,
+          sessionId: session.id,
+        });
+      }
+    }
+
+    // --- "Processing..." entries for recently-stopped sessions ---
+    // When a session ends (streamer stops or manual stop), Python still needs time to run
+    // FFmpeg conversion. Bridge the gap: show a "Processing video..." card until the
+    // final file appears in the vault. Only show for sessions stopped within last 10 minutes.
+    const TEN_MINUTES = 10 * 60 * 1000;
+    const now = Date.now();
+    const recentlyStoppedSessions = allSessions.filter((s) => {
+      if (s.status === 'running') return false;
+      if (!s.stopTime) return false;
+      return now - new Date(s.stopTime).getTime() < TEN_MINUTES;
+    });
+
+    for (const session of recentlyStoppedSessions) {
+      // Only show "Processing" card if no real file exists for this user yet
+      const hasFile = videoFiles.some(
+        (v) => !v.isRecording && v.filename.toLowerCase().includes(session.user.toLowerCase())
+      );
+      if (!hasFile) {
+        videoFiles.push({
+          filename: `PROCESSING_${session.user}_video.mp4`,
+          path: '',
+          size: 0,
+          sizeFormatted: 'Processing...',
+          createdAt: session.stopTime!,
+          userTag: `@${session.user}`,
+          format: 'MP4',
+          url: '',
+          isRecording: true,   // Reuse isRecording flag so UI shows animated card
           sessionId: session.id,
         });
       }

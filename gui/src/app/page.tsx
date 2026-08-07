@@ -348,54 +348,81 @@ export default function DashboardPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
                 {recentVideos.map((video) =>
                   video.isRecording ? (
-                    /* ── In-progress recording card ── */
-                    <div
-                      key={video.filename}
-                      className="glass-panel p-4 rounded-2xl border border-[#fe2c55]/50 bg-gradient-to-br from-[#130e1a] to-[#12101a] flex flex-col justify-between shadow-xl shadow-[#fe2c55]/10"
-                    >
-                      <div>
-                        {/* Live recording thumbnail */}
-                        <div className="h-36 rounded-xl bg-slate-950 border border-[#fe2c55]/30 flex flex-col items-center justify-center relative overflow-hidden">
-                          {/* Animated pulse rings */}
-                          <div className="absolute inset-0 flex items-center justify-center">
-                            <div className="w-20 h-20 rounded-full bg-[#fe2c55]/10 animate-ping absolute" />
-                            <div className="w-14 h-14 rounded-full bg-[#fe2c55]/15 animate-pulse absolute" />
+                    video.filename.startsWith('LIVE_') ? (
+                      /* ── In-progress / CAPTURING card ── */
+                      <div
+                        key={video.filename}
+                        className="glass-panel p-4 rounded-2xl border border-[#fe2c55]/50 bg-gradient-to-br from-[#130e1a] to-[#12101a] flex flex-col justify-between shadow-xl shadow-[#fe2c55]/10"
+                      >
+                        <div>
+                          <div className="h-36 rounded-xl bg-slate-950 border border-[#fe2c55]/30 flex flex-col items-center justify-center relative overflow-hidden">
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <div className="w-20 h-20 rounded-full bg-[#fe2c55]/10 animate-ping absolute" />
+                              <div className="w-14 h-14 rounded-full bg-[#fe2c55]/15 animate-pulse absolute" />
+                            </div>
+                            <div className="relative z-10 w-12 h-12 rounded-full bg-[#fe2c55]/30 border border-[#fe2c55]/60 flex items-center justify-center shadow-lg shadow-[#fe2c55]/30">
+                              <Radio className="w-6 h-6 text-[#fe2c55] animate-pulse" />
+                            </div>
+                            <span className="relative z-10 mt-2 text-[10px] font-bold text-[#fe2c55] tracking-widest uppercase bg-[#fe2c55]/10 px-2 py-0.5 rounded border border-[#fe2c55]/30">
+                              ● CAPTURING
+                            </span>
                           </div>
-                          <div className="relative z-10 w-12 h-12 rounded-full bg-[#fe2c55]/30 border border-[#fe2c55]/60 flex items-center justify-center shadow-lg shadow-[#fe2c55]/30">
-                            <Radio className="w-6 h-6 text-[#fe2c55] animate-pulse" />
+                          <div className="mt-3">
+                            <h4 className="font-bold text-sm text-white truncate">
+                              {video.userTag} — Recording Live
+                            </h4>
+                            <div className="flex items-center justify-between text-xs text-slate-400 mt-1">
+                              <span className="text-[#fe2c55] font-medium flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-[#fe2c55] animate-ping inline-block" />
+                                LIVE
+                              </span>
+                              <span className="text-emerald-400 font-mono">{video.sizeFormatted}</span>
+                            </div>
                           </div>
-                          <span className="relative z-10 mt-2 text-[10px] font-bold text-[#fe2c55] tracking-widest uppercase bg-[#fe2c55]/10 px-2 py-0.5 rounded border border-[#fe2c55]/30">
-                            ● CAPTURING
+                        </div>
+                        <div className="flex items-center justify-between pt-3 mt-3 border-t border-[#fe2c55]/20 text-xs">
+                          <span className="text-slate-500 text-[11px]">
+                            Started: {new Date(video.createdAt).toLocaleTimeString()}
+                          </span>
+                          <button
+                            onClick={() => video.sessionId && handleStopSession(video.sessionId)}
+                            className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 text-xs font-semibold transition-colors"
+                          >
+                            <StopCircle className="w-3.5 h-3.5" />
+                            Stop
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      /* ── Post-recording PROCESSING card ── */
+                      <div
+                        key={video.filename}
+                        className="glass-panel p-4 rounded-2xl border border-amber-500/40 bg-gradient-to-br from-[#141008] to-[#120f08] flex flex-col justify-between shadow-xl shadow-amber-500/5"
+                      >
+                        <div>
+                          <div className="h-36 rounded-xl bg-slate-950 border border-amber-500/20 flex flex-col items-center justify-center relative overflow-hidden">
+                            <div className="w-12 h-12 border-4 border-amber-500/30 border-t-amber-400 rounded-full animate-spin" />
+                            <span className="mt-3 text-[10px] font-bold text-amber-400 tracking-widest uppercase">
+                              ⏳ PROCESSING
+                            </span>
+                          </div>
+                          <div className="mt-3">
+                            <h4 className="font-bold text-sm text-white truncate">
+                              {video.userTag} — Converting video...
+                            </h4>
+                            <div className="flex items-center justify-between text-xs text-slate-400 mt-1">
+                              <span className="text-amber-400 font-medium">Finalizing MP4</span>
+                              <span className="text-slate-500 font-mono text-[10px]">Refresh to check</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center pt-3 mt-3 border-t border-amber-500/10 text-xs">
+                          <span className="text-slate-500 text-[11px]">
+                            Stopped: {new Date(video.createdAt).toLocaleTimeString()}
                           </span>
                         </div>
-
-                        <div className="mt-3">
-                          <h4 className="font-bold text-sm text-white truncate" title={`@${video.userTag} — Recording in Progress`}>
-                            {video.userTag} — Recording Live
-                          </h4>
-                          <div className="flex items-center justify-between text-xs text-slate-400 mt-1">
-                            <span className="text-[#fe2c55] font-medium flex items-center gap-1">
-                              <span className="w-1.5 h-1.5 rounded-full bg-[#fe2c55] animate-ping inline-block" />
-                              LIVE
-                            </span>
-                            <span className="text-emerald-400 font-mono">{video.sizeFormatted}</span>
-                          </div>
-                        </div>
                       </div>
-
-                      <div className="flex items-center justify-between pt-3 mt-3 border-t border-[#fe2c55]/20 text-xs">
-                        <span className="text-slate-500 text-[11px]">
-                          Started: {new Date(video.createdAt).toLocaleTimeString()}
-                        </span>
-                        <button
-                          onClick={() => video.sessionId && handleStopSession(video.sessionId)}
-                          className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 text-xs font-semibold transition-colors"
-                        >
-                          <StopCircle className="w-3.5 h-3.5" />
-                          Stop
-                        </button>
-                      </div>
-                    </div>
+                    )
                   ) : (
                     /* ── Completed recording card ── */
                     <div
