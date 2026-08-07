@@ -28,6 +28,8 @@ export interface VideoFile {
   userTag: string;
   format: string;
   url: string;
+  isRecording?: boolean; // true = virtual entry for in-progress recording
+  sessionId?: string;    // session ID for in-progress entries
 }
 
 export interface EngineSettings {

@@ -51,6 +51,7 @@ function formatBytes(bytes: number): string {
 }
 
 // Helper to auto-remux orphaned un-converted _flv.mp4 raw stream files into clean playable .mp4
+// Also rescues orphaned segment files (.{stem}_seg*.flv) left behind after a crash/force-kill
 export function autoRemuxUnfinishedVideos(outputDir: string) {
   if (!fs.existsSync(outputDir)) return;
   // Do NOT perform background remuxing if any recording session is active
@@ -62,13 +63,79 @@ export function autoRemuxUnfinishedVideos(outputDir: string) {
     const files = fs.readdirSync(outputDir);
     const now = Date.now();
 
-    for (const file of files) {
+    // --- Pass 1: Rescue orphaned hidden segment files (.{stem}_seg*.flv) ---
+    // These are left behind when Python is force-killed before it can concat them
+    const segmentFiles = files.filter(
+      (f) => f.startsWith('.') && f.includes('_seg') && f.endsWith('.flv')
+    );
+
+    // Group segments by their stem (the part before _seg####)
+    const segmentGroups: Record<string, string[]> = {};
+    for (const seg of segmentFiles) {
+      // Pattern: .{stem}_seg0000.flv
+      const match = seg.match(/^\.(.+)_seg(\d{4})\.flv$/);
+      if (!match) continue;
+      const stem = match[1];
+      if (!segmentGroups[stem]) segmentGroups[stem] = [];
+      segmentGroups[stem].push(seg);
+    }
+
+    for (const [stem, segs] of Object.entries(segmentGroups)) {
+      try {
+        // Only rescue segments older than 5 minutes (not from an active recording)
+        const allOld = segs.every((seg) => {
+          const segPath = path.join(outputDir, seg);
+          try {
+            return now - fs.statSync(segPath).mtimeMs > 300000;
+          } catch {
+            return false;
+          }
+        });
+        if (!allOld) continue;
+
+        // Sort by segment index
+        segs.sort();
+        const fullSegPaths = segs.map((s) => path.join(outputDir, s));
+        const rescuedFlv = path.join(outputDir, `${stem}_flv.mp4`);
+
+        if (segs.length === 1) {
+          // Single segment — just rename
+          fs.renameSync(fullSegPaths[0], rescuedFlv);
+          console.log(`[SYS] Rescued single-segment recording: ${stem}_flv.mp4`);
+        } else {
+          // Multiple segments — concat with FFmpeg
+          const concatList = path.join(outputDir, `${stem}_rescue_concat.txt`);
+          const concatContent = fullSegPaths.map((p) => `file '${p}'`).join('\n');
+          fs.writeFileSync(concatList, concatContent, 'utf-8');
+
+          execSync(
+            `"${ffmpegCmd}" -y -f concat -safe 0 -i "${concatList}" -c copy "${rescuedFlv}"`,
+            { stdio: 'ignore', timeout: 300000 }
+          );
+
+          fs.unlinkSync(concatList);
+
+          if (fs.existsSync(rescuedFlv) && fs.statSync(rescuedFlv).size > 0) {
+            for (const seg of fullSegPaths) {
+              try { fs.unlinkSync(seg); } catch {}
+            }
+            console.log(`[SYS] Rescued ${segs.length}-segment recording -> ${stem}_flv.mp4`);
+          }
+        }
+      } catch (e) {
+        console.error(`[SYS] Failed rescuing segments for ${stem}:`, e);
+      }
+    }
+
+    // --- Pass 2: Re-read files after segment rescue, then remux _flv.mp4 -> .mp4 ---
+    const updatedFiles = fs.readdirSync(outputDir);
+    for (const file of updatedFiles) {
       if (file.endsWith('_flv.mp4')) {
         const fullFlvPath = path.join(outputDir, file);
 
         try {
           const stat = fs.statSync(fullFlvPath);
-          // CRITICAL FIX: Skip files modified within the last 2 minutes (active or recently ended recording sessions)
+          // Skip files modified within the last 2 minutes (active or recently ended)
           if (now - stat.mtimeMs < 120000) {
             continue;
           }
@@ -76,7 +143,16 @@ export function autoRemuxUnfinishedVideos(outputDir: string) {
           const targetMp4Name = file.replace(/_flv\.mp4$/, '.mp4');
           const targetMp4Path = path.join(outputDir, targetMp4Name);
 
-          execSync(`"${ffmpegCmd}" -y -i "${fullFlvPath}" -c copy "${targetMp4Path}"`, { stdio: 'ignore' });
+          // Skip if already converted
+          if (fs.existsSync(targetMp4Path) && fs.statSync(targetMp4Path).size > 0) {
+            fs.unlinkSync(fullFlvPath);
+            continue;
+          }
+
+          execSync(`"${ffmpegCmd}" -y -i "${fullFlvPath}" -c copy "${targetMp4Path}"`, {
+            stdio: 'ignore',
+            timeout: 300000,
+          });
           if (fs.existsSync(targetMp4Path) && fs.statSync(targetMp4Path).size > 0) {
             fs.unlinkSync(fullFlvPath);
             console.log(`[SYS] Auto-remuxed orphaned file ${file} -> ${targetMp4Name}`);
@@ -344,35 +420,107 @@ function updateSessionInStorage(session: RecordingSession) {
   }
 }
 
+// Helper: check if a PID is still running on Windows
+function isPidRunning(pid: number): boolean {
+  try {
+    execSync(`tasklist /fi "PID eq ${pid}" /nh`, { stdio: 'pipe' });
+    const out = execSync(`tasklist /fi "PID eq ${pid}" /nh`).toString();
+    return out.includes(String(pid));
+  } catch {
+    return false;
+  }
+}
+
 // Stop a running recording session
+// On Windows: sends a graceful signal first (CTRL_C_EVENT via taskkill without /F),
+// waits up to 60 seconds for Python to finish concat+convert, then force-kills if needed.
 export function stopRecording(sessionId: string): boolean {
   const child = activeProcesses.get(sessionId);
-  if (child) {
+  if (!child) return false;
+
+  const sessions = getSessions();
+  const session = sessions.find((s) => s.id === sessionId);
+  const outputDir = session?.outputDir || DEFAULT_OUTPUT_DIR;
+
+  // Mark session as stopping immediately so UI updates
+  if (session) {
+    session.status = 'stopped';
+    session.stopTime = new Date().toISOString();
+    session.logs.push('[SYS] Stop requested — waiting for recording to finalize...');
+    saveSessions(sessions);
+  }
+
+  activeProcesses.delete(sessionId);
+
+  // Run the actual shutdown asynchronously so the API response is not blocked
+  setImmediate(async () => {
+    const pid = child.pid;
+    let gracefulSuccess = false;
+
     try {
       if (process.platform === 'win32') {
-        execSync(`taskkill /pid ${child.pid} /T /F`);
+        // Send graceful signal first (no /F flag) — Python's KeyboardInterrupt handler will run
+        try {
+          execSync(`taskkill /pid ${pid}`, { stdio: 'ignore' });
+        } catch {
+          // Process may have already exited — that's fine
+        }
+
+        // Wait up to 60 seconds for the process to exit gracefully
+        const deadline = Date.now() + 60000;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 1500));
+          if (!isPidRunning(pid!)) {
+            gracefulSuccess = true;
+            break;
+          }
+        }
+
+        // If still running after 60s, force kill
+        if (!gracefulSuccess && pid) {
+          try {
+            execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' });
+          } catch {}
+          console.warn(`[SYS] Graceful shutdown timed out for PID ${pid}. Force-killed.`);
+        }
       } else {
+        // Linux/macOS: SIGINT triggers Python's KeyboardInterrupt cleanly
         child.kill('SIGINT');
+
+        const deadline = Date.now() + 60000;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 1500));
+          try { process.kill(pid!, 0); } catch { gracefulSuccess = true; break; }
+        }
+
+        if (!gracefulSuccess) {
+          child.kill('SIGKILL');
+          console.warn(`[SYS] Graceful shutdown timed out for PID ${pid}. Force-killed.`);
+        }
       }
     } catch (e) {
-      console.error(`Error killing process ${child.pid}:`, e);
+      console.error(`[SYS] Error during graceful shutdown of PID ${pid}:`, e);
     }
-    activeProcesses.delete(sessionId);
 
-    const sessions = getSessions();
-    const session = sessions.find((s) => s.id === sessionId);
-    if (session) {
-      session.status = 'stopped';
-      session.stopTime = new Date().toISOString();
-      session.logs.push('[SYS] Session forcefully stopped by user.');
-      saveSessions(sessions);
-      if (session.outputDir) {
-        autoRemuxUnfinishedVideos(session.outputDir);
+    // After process is gone, update session logs and rescue any leftover segments
+    try {
+      const latestSessions = getSessions();
+      const latestSession = latestSessions.find((s) => s.id === sessionId);
+      if (latestSession) {
+        latestSession.logs.push(
+          gracefulSuccess
+            ? '[SYS] Recording finalized gracefully. Post-processing complete.'
+            : '[SYS] Session force-terminated. Attempting segment rescue...'
+        );
+        saveSessions(latestSessions);
       }
-    }
-    return true;
-  }
-  return false;
+    } catch {}
+
+    // Rescue any orphaned segment files
+    autoRemuxUnfinishedVideos(outputDir);
+  });
+
+  return true;
 }
 
 // Check live status of a user
@@ -471,6 +619,8 @@ except Exception as e:
 }
 
 // Get list of recorded video files
+// Also returns virtual entries for currently active recording sessions so the
+// Video Vault shows real-time progress while a stream is being captured.
 export function getRecordedVideos(): VideoFile[] {
   const settings = getSettings();
   const dir = settings.outputDir || DEFAULT_OUTPUT_DIR;
@@ -480,9 +630,10 @@ export function getRecordedVideos(): VideoFile[] {
   }
 
   const validExts = ['.mp4', '.mkv', '.flv', '.ts', '.mov', '.avi'];
+  const videoFiles: VideoFile[] = [];
+
   try {
     const files = fs.readdirSync(dir);
-    const videoFiles: VideoFile[] = [];
 
     for (const file of files) {
       const ext = path.extname(file).toLowerCase();
@@ -494,8 +645,8 @@ export function getRecordedVideos(): VideoFile[] {
         const fullPath = path.join(dir, file);
         const stat = fs.statSync(fullPath);
 
-        // Try extract username tag from standard output filename format: username_YYYY-MM-DD...
-        const userTagMatch = file.match(/^([a-zA-Z0-9_.-]+)_/);
+        // Try extract username tag from standard output filename format: TK_username_YYYY...
+        const userTagMatch = file.match(/^TK_([a-zA-Z0-9_.-]+)_/) || file.match(/^([a-zA-Z0-9_.-]+)_/);
         const userTag = userTagMatch ? `@${userTagMatch[1]}` : 'TikTok Stream';
 
         videoFiles.push({
@@ -511,11 +662,54 @@ export function getRecordedVideos(): VideoFile[] {
       }
     }
 
-    // Sort by modified date descending
+    // --- Virtual entries for active recording sessions ---
+    // Show each running session as a "Recording in Progress" entry in the vault
+    const runningSessions = getSessions().filter((s) => s.status === 'running');
+    for (const session of runningSessions) {
+      const sessionDir = session.outputDir || dir;
+
+      // Calculate total bytes captured so far from segment files
+      let capturedBytes = 0;
+      try {
+        const allFiles = fs.readdirSync(sessionDir);
+        for (const f of allFiles) {
+          // Segment files: .<stem>_seg*.flv  OR  non-hidden _flv.mp4 already written
+          if ((f.startsWith('.') && f.includes('_seg') && f.endsWith('.flv')) ||
+               f.endsWith('_flv.mp4')) {
+            try {
+              capturedBytes += fs.statSync(path.join(sessionDir, f)).size;
+            } catch {}
+          }
+        }
+      } catch {}
+
+      const virtualFilename = `LIVE_${session.user}_recording_in_progress.mp4`;
+
+      // Avoid adding a virtual entry if a real output file already exists for this session
+      const alreadyHasFile = videoFiles.some(
+        (v) => v.filename.includes(session.user) && !v.isRecording
+      );
+      if (!alreadyHasFile) {
+        videoFiles.push({
+          filename: virtualFilename,
+          path: '',
+          size: capturedBytes,
+          sizeFormatted: `${formatBytes(capturedBytes)} captured`,
+          createdAt: session.startTime,
+          userTag: `@${session.user}`,
+          format: 'LIVE',
+          url: '',
+          isRecording: true,
+          sessionId: session.id,
+        });
+      }
+    }
+
+    // Sort by modified date descending (virtual entries will be first since startTime is recent)
     return videoFiles.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   } catch (err) {
     console.error('Error scanning video directory:', err);
-    return [];
+    return videoFiles;
   }
 }
 

@@ -346,58 +346,110 @@ export default function DashboardPage() {
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-                {recentVideos.map((video) => (
-                  <div
-                    key={video.filename}
-                    className="glass-panel p-4 rounded-2xl border border-slate-800 hover:border-[#00f2fe]/40 transition-all duration-300 group flex flex-col justify-between"
-                  >
-                    <div>
-                      {/* Video Thumbnail placeholder card with Play icon */}
-                      <div
-                        onClick={() => setActiveVideoModal(video)}
-                        className="h-36 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-col items-center justify-center relative cursor-pointer overflow-hidden group-hover:border-[#00f2fe]/60 transition-colors"
-                      >
-                        <div className="w-12 h-12 rounded-full bg-[#fe2c55]/20 border border-[#fe2c55]/40 text-[#fe2c55] group-hover:scale-110 flex items-center justify-center transition-transform shadow-lg shadow-[#fe2c55]/20">
-                          <Play className="w-6 h-6 fill-[#fe2c55] ml-0.5" />
+                {recentVideos.map((video) =>
+                  video.isRecording ? (
+                    /* ── In-progress recording card ── */
+                    <div
+                      key={video.filename}
+                      className="glass-panel p-4 rounded-2xl border border-[#fe2c55]/50 bg-gradient-to-br from-[#130e1a] to-[#12101a] flex flex-col justify-between shadow-xl shadow-[#fe2c55]/10"
+                    >
+                      <div>
+                        {/* Live recording thumbnail */}
+                        <div className="h-36 rounded-xl bg-slate-950 border border-[#fe2c55]/30 flex flex-col items-center justify-center relative overflow-hidden">
+                          {/* Animated pulse rings */}
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <div className="w-20 h-20 rounded-full bg-[#fe2c55]/10 animate-ping absolute" />
+                            <div className="w-14 h-14 rounded-full bg-[#fe2c55]/15 animate-pulse absolute" />
+                          </div>
+                          <div className="relative z-10 w-12 h-12 rounded-full bg-[#fe2c55]/30 border border-[#fe2c55]/60 flex items-center justify-center shadow-lg shadow-[#fe2c55]/30">
+                            <Radio className="w-6 h-6 text-[#fe2c55] animate-pulse" />
+                          </div>
+                          <span className="relative z-10 mt-2 text-[10px] font-bold text-[#fe2c55] tracking-widest uppercase bg-[#fe2c55]/10 px-2 py-0.5 rounded border border-[#fe2c55]/30">
+                            ● CAPTURING
+                          </span>
                         </div>
-                        <span className="text-[10px] font-mono text-slate-400 mt-2 px-2 py-0.5 rounded bg-slate-950/80">
-                          {video.format}
+
+                        <div className="mt-3">
+                          <h4 className="font-bold text-sm text-white truncate" title={`@${video.userTag} — Recording in Progress`}>
+                            {video.userTag} — Recording Live
+                          </h4>
+                          <div className="flex items-center justify-between text-xs text-slate-400 mt-1">
+                            <span className="text-[#fe2c55] font-medium flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-[#fe2c55] animate-ping inline-block" />
+                              LIVE
+                            </span>
+                            <span className="text-emerald-400 font-mono">{video.sizeFormatted}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-3 mt-3 border-t border-[#fe2c55]/20 text-xs">
+                        <span className="text-slate-500 text-[11px]">
+                          Started: {new Date(video.createdAt).toLocaleTimeString()}
                         </span>
+                        <button
+                          onClick={() => video.sessionId && handleStopSession(video.sessionId)}
+                          className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 text-xs font-semibold transition-colors"
+                        >
+                          <StopCircle className="w-3.5 h-3.5" />
+                          Stop
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* ── Completed recording card ── */
+                    <div
+                      key={video.filename}
+                      className="glass-panel p-4 rounded-2xl border border-slate-800 hover:border-[#00f2fe]/40 transition-all duration-300 group flex flex-col justify-between"
+                    >
+                      <div>
+                        {/* Video Thumbnail placeholder card with Play icon */}
+                        <div
+                          onClick={() => setActiveVideoModal(video)}
+                          className="h-36 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-col items-center justify-center relative cursor-pointer overflow-hidden group-hover:border-[#00f2fe]/60 transition-colors"
+                        >
+                          <div className="w-12 h-12 rounded-full bg-[#fe2c55]/20 border border-[#fe2c55]/40 text-[#fe2c55] group-hover:scale-110 flex items-center justify-center transition-transform shadow-lg shadow-[#fe2c55]/20">
+                            <Play className="w-6 h-6 fill-[#fe2c55] ml-0.5" />
+                          </div>
+                          <span className="text-[10px] font-mono text-slate-400 mt-2 px-2 py-0.5 rounded bg-slate-950/80">
+                            {video.format}
+                          </span>
+                        </div>
+
+                        <div className="mt-3">
+                          <h4 className="font-bold text-sm text-white truncate" title={video.filename}>
+                            {video.filename}
+                          </h4>
+                          <div className="flex items-center justify-between text-xs text-slate-400 mt-1">
+                            <span className="text-[#00f2fe] font-medium">{video.userTag}</span>
+                            <span>{video.sizeFormatted}</span>
+                          </div>
+                        </div>
                       </div>
 
-                      <div className="mt-3">
-                        <h4 className="font-bold text-sm text-white truncate" title={video.filename}>
-                          {video.filename}
-                        </h4>
-                        <div className="flex items-center justify-between text-xs text-slate-400 mt-1">
-                          <span className="text-[#00f2fe] font-medium">{video.userTag}</span>
-                          <span>{video.sizeFormatted}</span>
+                      <div className="flex items-center justify-between pt-3 mt-3 border-t border-slate-800/60 text-xs">
+                        <span className="text-slate-500 text-[11px]">
+                          {new Date(video.createdAt).toLocaleDateString()}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setActiveVideoModal(video)}
+                            className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs transition-colors"
+                          >
+                            Play
+                          </button>
+                          <button
+                            onClick={() => handleDeleteVideo(video.filename)}
+                            className="p-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </div>
                     </div>
-
-                    <div className="flex items-center justify-between pt-3 mt-3 border-t border-slate-800/60 text-xs">
-                      <span className="text-slate-500 text-[11px]">
-                        {new Date(video.createdAt).toLocaleDateString()}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => setActiveVideoModal(video)}
-                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs transition-colors"
-                        >
-                          Play
-                        </button>
-                        <button
-                          onClick={() => handleDeleteVideo(video.filename)}
-                          className="p-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                  )
+                )}
               </div>
             )}
           </div>

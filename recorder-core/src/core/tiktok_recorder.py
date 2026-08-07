@@ -218,6 +218,8 @@ class TikTokRecorder:
         segment_index = 0
         url_index = 0
         current_live_urls = list(live_urls)
+        last_data_time = time.time()  # Track when we last received actual stream data
+        MAX_IDLE_SECONDS = 300  # Stop if no data received for 5 minutes
 
         while not stop_recording:
             if url_index >= len(current_live_urls):
@@ -246,6 +248,7 @@ class TikTokRecorder:
                         if chunk:
                             chunk_received = True
                             consecutive_empty_streams = 0
+                            last_data_time = time.time()  # Reset idle timer on any real data
                             buffer.extend(chunk)
                             bytes_written += len(chunk)
 
@@ -271,6 +274,16 @@ class TikTokRecorder:
                     Path(seg_path).unlink(missing_ok=True)
 
                 if stop_recording:
+                    break
+
+                # Global idle timeout: stop if no real data received for MAX_IDLE_SECONDS
+                idle_seconds = time.time() - last_data_time
+                if idle_seconds >= MAX_IDLE_SECONDS:
+                    logger.info(
+                        f"No stream data received for {MAX_IDLE_SECONDS // 60} minutes. "
+                        "Stream has likely ended. Stopping recording."
+                    )
+                    stop_recording = True
                     break
 
                 if not chunk_received:
@@ -308,7 +321,10 @@ class TikTokRecorder:
                         if refreshed:
                             current_live_urls = refreshed
                             url_index = 0
-                        consecutive_empty_streams = 0
+                        # Do NOT reset consecutive_empty_streams here — only real data resets it.
+                        # This prevents an infinite loop if is_room_alive returns True stale data.
+                        # We DO reset it partially to give the fresh URLs a fair chance (3 more tries)
+                        consecutive_empty_streams = max(0, consecutive_empty_streams - 3)
                         time.sleep(2)
 
             except KeyboardInterrupt:
